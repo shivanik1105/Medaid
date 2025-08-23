@@ -41,13 +41,26 @@ def create_user(name: str, age: int, email: str, language: str):
     # Fetches and returns the complete new user profile
     return users_collection.find_one({"_id": result.inserted_id})
 
-def update_user_history(user_id, history_list: list):
-    """Finds a user by their _id and updates their past_history field."""
+def update_user_history(user_id, history_list: list, session_record: dict):
+    """Finds a user by their _id and updates their past_history field and adds a new session record."""
     if not client: return None
     
     # Use the $set operator to update the specific field in the document
     users_collection.update_one(
         {'_id': ObjectId(user_id)},
-        {'$set': {'past_history': history_list}}
+        {'$set': {'past_history': history_list},
+         '$push': {'records': {'timestamp': datetime.now(), 'session_data': session_record}}}
     )
-    print(f"Updated past history for user {user_id}")
+    print(f"Updated past history and added session record for user {user_id}")
+
+def update_user_report_data(user_id, report_data: dict):
+    """
+    Finds a user by their _id and updates their top-level 'report_data' field.
+    """
+    if not client: return None
+
+    users_collection.update_one(
+        {'_id': ObjectId(user_id)},
+        {'$set': {'report_data': report_data}}
+    )
+    print(f"Updated report data for user {user_id}")

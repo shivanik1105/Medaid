@@ -3,3 +3,8 @@ pymongo
 python-dotenv
 pandas
 scikit-learn
+transformers
+torch
+reportlab
+pymupdf
+Pillow
