@@ -8,3 +8,7 @@ torch
 reportlab
 pymupdf
 Pillow
+pytesseract
+langchain
+langchain-google-genai
+google-generativeai

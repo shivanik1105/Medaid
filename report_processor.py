@@ -1,168 +1,269 @@
-import fitz # PyMuPDF
+# report_processor.py - Medical Report Analysis Module
+import streamlit as st
+import re
+import json
+from typing import Dict, Any
+import fitz  # PyMuPDF for PDF processing
 from PIL import Image
-import io
-import re # New import for regex
+import pytesseract
 
-def extract_text_from_pdf(file_content):
-    """Extracts text from a PDF file."""
-    doc = fitz.open(stream=file_content, filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+# Medical parameter reference ranges (simplified)
+NORMAL_RANGES = {
+    'hemoglobin': {
+        'male': (13.5, 17.5),
+        'female': (12.0, 15.5),
+        'unit': 'g/dL'
+    },
+    'wbc_count': {
+        'normal': (4000, 11000),
+        'unit': '/μL'
+    },
+    'platelet_count': {
+        'normal': (150000, 450000),
+        'unit': '/μL'
+    },
+    'glucose_fasting': {
+        'normal': (70, 100),
+        'prediabetic': (100, 125),
+        'unit': 'mg/dL'
+    },
+    'glucose_random': {
+        'normal': (70, 140),
+        'unit': 'mg/dL'
+    },
+    'creatinine': {
+        'male': (0.9, 1.3),
+        'female': (0.6, 1.1),
+        'unit': 'mg/dL'
+    },
+    'blood_pressure': {
+        'normal': (90, 120),  # Systolic for normal
+        'high': (140, 90), # Example for hypertension
+        'unit': 'mmHg'
+    },
+    'temperature': {
+        'normal': (97.0, 99.0),
+        'unit': '°F'
+    },
+    'heart_rate': {
+        'normal': (60, 100),
+        'unit': 'bpm'
+    }
+}
 
-def extract_text_from_image(file_content):
-    """
-    Extracts text from an image file.
-    Note: For robust OCR, an external Tesseract installation and pytesseract library would be needed.
-    This is a basic placeholder.
-    """
-    # Using Pillow to open image, but actual OCR would require pytesseract
-    # For now, we'll return a placeholder string for image analysis
+# Keywords to extract from reports
+MEDICAL_KEYWORDS = {
+    'hemoglobin': ['hemoglobin', 'hb', 'haemoglobin'],
+    'wbc_count': ['wbc', 'white blood cell', 'leucocyte', 'leukocyte'],
+    'platelet_count': ['platelet', 'thrombocyte'],
+    'glucose_fasting': ['glucose fasting', 'fbs', 'fasting blood sugar'],
+    'glucose_random': ['glucose random', 'rbs', 'random blood sugar', 'blood glucose'],
+    'creatinine': ['creatinine', 'serum creatinine'],
+    'blood_pressure': ['bp', 'blood pressure', 'systolic', 'diastolic'],
+    'temperature': ['temperature', 'fever', 'temp'],
+    'heart_rate': ['heart rate', 'pulse', 'hr']
+}
+
+def extract_text_from_pdf(uploaded_file):
+    """Extract text from PDF files"""
     try:
-        Image.open(io.BytesIO(file_content))
-        return "Image report uploaded. OCR processing not fully implemented in this placeholder."
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        text = ""
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            text += page.get_text()
+        pdf_document.close()
+        return text
     except Exception as e:
-        return f"Error processing image: {e}"
+        st.error(f"Error reading PDF: {e}")
+        return ""
 
-def analyze_medical_report(uploaded_file) -> dict:
-    """
-    Analyzes an uploaded medical report (PDF or image) and extracts text.
-    Returns a dictionary with the extracted text and structured medical terms.
-    """
-    extracted_text = ""
-    file_type = uploaded_file.type
+def extract_text_from_image(uploaded_file):
+    """Extract text from image files using OCR"""
+    try:
+        image = Image.open(uploaded_file)
+        text = pytesseract.image_to_string(image)
+        return text
+    except Exception as e:
+        st.error(f"Error processing image: {e}")
+        return ""
 
-    if "pdf" in file_type:
-        extracted_text = extract_text_from_pdf(uploaded_file.getvalue())
-    elif "image" in file_type or "png" in file_type or "jpg" in file_type or "jpeg" in file_type:
-        extracted_text = extract_text_from_image(uploaded_file.getvalue())
-    else:
-        extracted_text = "Unsupported file type for analysis."
+def extract_medical_values(text):
+    """Extract medical parameter values from text"""
+    structured_data = {}
+    
+    # Clean and normalize text
+    text = text.lower().replace('\n', ' ')
+    
+    for param, keywords in MEDICAL_KEYWORDS.items():
+        for keyword in keywords:
+            # Pattern to match parameter name followed by value
+            patterns = [
+                rf'{keyword}\s*:?\s*(\d+\.?\d*)',  # Basic pattern
+                rf'{keyword}\s*[-:]?\s*(\d+\.?\d*)',  # With dash or colon
+                rf'(\d+\.?\d*)\s*{keyword}',  # Value before parameter
+            ]
+            
+            for pattern in patterns:
+                matches = re.findall(pattern, text)
+                if matches:
+                    try:
+                        value = float(matches[0])
+                        structured_data[param] = value
+                        break
+                    except ValueError:
+                        continue
+            
+            if param in structured_data:
+                break
+    
+    return structured_data
 
-    # Extract structured medical terms
-    structured_data = extract_medical_terms(extracted_text)
+def interpret_values(structured_data, patient_age=None, patient_sex='unknown'):
+    """Interpret medical values against normal ranges"""
+    interpretations = {}
+    
+    for param, value in structured_data.items():
+        if param in NORMAL_RANGES:
+            range_info = NORMAL_RANGES[param]
+            
+            # Get appropriate range based on sex if available
+            if patient_sex.lower() in ['male', 'female'] and patient_sex.lower() in range_info:
+                normal_range = range_info[patient_sex.lower()]
+            elif 'normal' in range_info:
+                normal_range = range_info['normal']
+            else:
+                # Default to male range if sex-specific and no sex provided
+                normal_range = range_info.get('male', range_info.get('female', (0, 999999)))
+            
+            unit = range_info.get('unit', '')
+            
+            # Determine if value is normal, high, or low
+            if value < normal_range[0]:
+                status = 'Low'
+                concern_level = 'Moderate' if param == 'hemoglobin' else 'Low'
+            elif value > normal_range[1]:
+                status = 'High'
+                concern_level = 'Moderate' if param in ['glucose_fasting', 'glucose_random'] else 'Low'
+            else:
+                status = 'Normal'
+                concern_level = 'None'
+            
+            interpretations[param] = {
+                'value': value,
+                'status': status,
+                'normal_range': normal_range,
+                'unit': unit,
+                'concern_level': concern_level
+            }
+    
+    return interpretations
 
-    return {"raw_text": extracted_text, "structured_data": structured_data}
+def analyze_medical_report(uploaded_file):
+    """Main function to analyze uploaded medical reports"""
+    try:
+        # Extract text based on file type
+        if uploaded_file.type == "application/pdf":
+            extracted_text = extract_text_from_pdf(uploaded_file)
+        elif uploaded_file.type in ["image/png", "image/jpg", "image/jpeg"]:
+            extracted_text = extract_text_from_image(uploaded_file)
+        else:
+            return {
+                'structured_data': {},
+                'interpretations': {},
+                'raw_text': '',
+                'error': 'Unsupported file type'
+            }
+        
+        if not extracted_text.strip():
+            return {
+                'structured_data': {},
+                'interpretations': {},
+                'raw_text': '',
+                'error': 'No text could be extracted from the file'
+            }
+        
+        # Extract structured medical data
+        structured_data = extract_medical_values(extracted_text)
+        
+        if not structured_data:
+            return {
+                'structured_data': {},
+                'interpretations': {},
+                'raw_text': extracted_text[:500],  # First 500 chars for debugging
+                'error': 'No medical parameters found in the report'
+            }
+        
+        # Interpret the values (we don't have patient sex/age here, so using defaults)
+        interpretations = interpret_values(structured_data)
+        
+        return {
+            'structured_data': structured_data,
+            'interpretations': interpretations,
+            'raw_text': extracted_text[:1000],  # First 1000 chars
+            'error': None
+        }
+        
+    except Exception as e:
+        st.error(f"Error analyzing report: {e}")
+        return {
+            'structured_data': {},
+            'interpretations': {},
+            'raw_text': '',
+            'error': str(e)
+        }
 
-def extract_medical_terms(text: str) -> dict:
-    """
-    Extracts structured medical terms (e.g., hemoglobin, sugar, BP) using regex.
-    This is a placeholder for more advanced NLP/ML extraction.
-    """
-    medical_terms = {}
-
-    # Example: Hemoglobin extraction (e.g., "Hemoglobin: 12.5 g/dL" or "Hb 12.5")
-    hemoglobin_match = re.search(r"[Hh][Bb](?:[ .:]|\s*concentration)?\s*(\d+\.?\d*)\s*(g/dL|g/L)?", text, re.IGNORECASE)
-    if hemoglobin_match:
-        medical_terms["hemoglobin"] = f"{hemoglobin_match.group(1)} {hemoglobin_match.group(2) or 'g/dL'}".strip()
-
-    # Example: Sugar/Glucose extraction (e.g., "Glucose: 100 mg/dL" or "Sugar 5.5 mmol/L")
-    sugar_match = re.search(r"(?:glucose|sugar):?\s*(\d+\.?\d*)\s*(mg/dL|mmol/L)?", text, re.IGNORECASE)
-    if sugar_match:
-        medical_terms["sugar"] = f"{sugar_match.group(1)} {sugar_match.group(2) or 'mg/dL'}".strip()
-
-    # Example: Blood Pressure extraction (e.g., "BP 120/80" or "Blood Pressure: 130/85 mmHg")
-    bp_match = re.search(r"(?:blood pressure|BP):?\s*(\d{2,3}/\d{2,3})\s*(mmHg)?", text, re.IGNORECASE)
-    if bp_match:
-        medical_terms["bp"] = f"{bp_match.group(1)} {bp_match.group(2) or 'mmHg'}".strip()
-
-    # TODO: Add risk flagging logic here in a future step.
-
-    return medical_terms
-
-def generate_report_explanation(structured_data: dict, user_age: int = None) -> str:
-    """
-    Generates a human-readable explanation of the medical report based on structured data and user age.
-    This is a simplified version and can be expanded with more medical knowledge.
-    """
-    explanation_parts = []
-
-    age_context = ""
-    if user_age:
-        if user_age < 12:
-            age_context = "(for a child)"
-        elif user_age >= 65:
-            age_context = "(for an elder)"
-
-    if "hemoglobin" in structured_data:
-        try:
-            value_str = structured_data["hemoglobin"]
-            # Extract numerical part, assuming format like '12.5 g/dL'
-            value = float(re.search(r'(\d+\.?\d*)', value_str).group(1))
-            # Age-specific thresholds for hemoglobin (simplified example)
-            if user_age and user_age < 18: # Pediatric reference
-                if value < 11.5:
-                    explanation_parts.append(f"Your hemoglobin level ({value_str}) {age_context} is lower than normal, which could indicate anemia or other conditions. Consult a pediatrician.")
-                elif value > 15.5:
-                    explanation_parts.append(f"Your hemoglobin level ({value_str}) {age_context} is higher than normal, which might require further investigation by a pediatrician.")
+def generate_report_explanation(structured_data, patient_age=None):
+    """Generate user-friendly explanations of report findings"""
+    if not structured_data:
+        return "No medical data could be extracted from your report."
+    
+    explanations = []
+    
+    try:
+        for param, value in structured_data.items():
+            if param == 'hemoglobin':
+                if value < 12:
+                    explanations.append(f"Your hemoglobin level ({value} g/dL) is low, which may indicate anemia. This can cause weakness and fatigue.")
+                elif value > 17:
+                    explanations.append(f"Your hemoglobin level ({value} g/dL) is high, which may need further evaluation.")
                 else:
-                    explanation_parts.append(f"Your hemoglobin level ({value_str}) {age_context} is within the normal range.")
-            else: # Adult reference
-                if value < 12.0:
-                    explanation_parts.append(f"Your hemoglobin level ({value_str}) {age_context} is lower than normal, which could indicate anemia or other conditions.")
-                elif value > 16.0:
-                    explanation_parts.append(f"Your hemoglobin level ({value_str}) {age_context} is higher than normal, which might require further investigation.")
+                    explanations.append(f"Your hemoglobin level ({value} g/dL) is normal.")
+            
+            elif param in ['glucose_fasting', 'glucose_random']:
+                if param == 'glucose_fasting':
+                    if value > 126:
+                        explanations.append(f"Your fasting glucose ({value} mg/dL) is high, suggesting possible diabetes.")
+                    elif value > 100:
+                        explanations.append(f"Your fasting glucose ({value} mg/dL) is slightly elevated (pre-diabetic range).")
+                    else:
+                        explanations.append(f"Your fasting glucose ({value} mg/dL) is normal.")
+                else:  # random glucose
+                    if value > 200:
+                        explanations.append(f"Your random glucose ({value} mg/dL) is very high, suggesting possible diabetes.")
+                    elif value > 140:
+                        explanations.append(f"Your random glucose ({value} mg/dL) is elevated.")
+                    else:
+                        explanations.append(f"Your random glucose ({value} mg/dL) is normal.")
+            
+            elif param == 'wbc_count':
+                if value > 11000:
+                    explanations.append(f"Your white blood cell count ({int(value)}/μL) is high, which may indicate infection or inflammation.")
+                elif value < 4000:
+                    explanations.append(f"Your white blood cell count ({int(value)}/μL) is low, which may indicate immune system issues.")
                 else:
-                    explanation_parts.append(f"Your hemoglobin level ({value_str}) {age_context} is within the normal range.")
-        except (ValueError, AttributeError):
-            explanation_parts.append(f"Could not interpret hemoglobin value: {structured_data["hemoglobin"]}.")
-
-    if "sugar" in structured_data:
-        try:
-            value_str = structured_data["sugar"]
-            value = float(re.search(r'(\d+\.?\d*)', value_str).group(1)) # Assuming mg/dL or mmol/L for now
-            # Age-specific thresholds for blood sugar (simplified example)
-            if user_age and user_age < 18: # Pediatric reference
-                if value > 125:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is elevated, which may suggest a risk of diabetes or pre-diabetes. Consult a pediatrician.")
-                elif value < 60:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is low, which might be hypoglycemia. Consult a pediatrician.")
+                    explanations.append(f"Your white blood cell count ({int(value)}/μL) is normal.")
+            
+            elif param == 'creatinine':
+                if value > 1.3:
+                    explanations.append(f"Your creatinine level ({value} mg/dL) is high, which may indicate kidney function issues.")
                 else:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is within the normal range.")
-            elif user_age and user_age >= 65: # Geriatric reference
-                if value > 160:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is elevated, which may suggest a risk of diabetes or pre-diabetes. Regular monitoring is advised.")
-                else:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is within a reasonable range for your age.")
-            else: # Adult reference
-                if value > 140:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is elevated, which may suggest a risk of diabetes or pre-diabetes.")
-                elif value < 70:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is low, which might be hypoglycemia.")
-                else:
-                    explanation_parts.append(f"Your blood sugar level ({value_str}) {age_context} is within the normal range.")
-        except (ValueError, AttributeError):
-            explanation_parts.append(f"Could not interpret blood sugar value: {structured_data["sugar"]}.")
-
-    if "bp" in structured_data:
-        try:
-            value_str = structured_data["bp"]
-            systolic, diastolic = map(int, value_str.split('/'))
-            # Age-specific thresholds for blood pressure (simplified example)
-            if user_age and user_age < 18: # Pediatric reference
-                if systolic >= 120 or diastolic >= 80:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is elevated for your age, indicating potential hypertension. Consult a pediatrician.")
-                elif systolic < 90 or diastolic < 55:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is low for your age, which could lead to dizziness or fainting. Consult a pediatrician.")
-                else:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is within the healthy range for your age.")
-            elif user_age and user_age >= 65: # Geriatric reference
-                if systolic >= 150 or diastolic >= 90:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is elevated. It's important to consult a doctor for management, considering age-related factors.")
-                else:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is within a reasonable range for your age.")
-            else: # Adult reference
-                if systolic >= 140 or diastolic >= 90:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is elevated, indicating hypertension. It's recommended to consult a doctor.")
-                elif systolic < 90 or diastolic < 60:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is low, which could lead to dizziness or fainting.")
-                else:
-                    explanation_parts.append(f"Your blood pressure ({value_str}) {age_context} is within the healthy range.")
-        except (ValueError, AttributeError):
-            explanation_parts.append(f"Could not interpret blood pressure value: {structured_data["bp"]}.")
-
-    if not explanation_parts:
+                    explanations.append(f"Your creatinine level ({value} mg/dL) is normal.")
+    
+    except Exception as e:
+        return f"Error generating explanation: {e}"
+    
+    if not explanations:
         return "No specific medical terms were extracted or could be interpreted for an explanation."
-
-    return "\n".join(explanation_parts)
+    
+    return "\n".join(explanations)

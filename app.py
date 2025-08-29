@@ -237,15 +237,15 @@ elif st.session_state.stage == 'results':
         st.session_state.session_data['final_symptom_set'] = final_symptom_set
 
         # Step 7: AI Engine Runs
-        # Modify run_prediction_engine to accept final_symptom_set directly
         prediction_output = run_prediction_engine(st.session_state.session_data, st.session_state.user_profile)
         
         risk_level = prediction_output['risk_level']
         reason = prediction_output['reason']
-        confidence = prediction_output.get('confidence', 0.0) # Use .get for safety, default to 0.0
-        # Assuming the backend provides the possible disease and similar cases
-        possible_disease = prediction_output.get('possible_disease', 'N/A') 
-        similar_cases = prediction_output.get('similar_cases', {})
+        confidence = prediction_output.get('confidence', 0.0)
+        possible_diseases = prediction_output.get('possible_diseases', ['Unknown'])
+        # The 'similar_cases' output is now just a note from the RAG model.
+        # We don't display the table anymore.
+        # similar_cases = prediction_output.get('similar_cases', {}) 
         
         # Step 9: Update Health Passport (Store results for PDF)
         st.session_state.session_data['triage_result'] = prediction_output
@@ -253,20 +253,18 @@ elif st.session_state.stage == 'results':
         # Now that all session data is complete, update the user history in the database
         update_user_history(
             st.session_state.user_profile['_id'], 
-            st.session_state.session_data.get('past_history', []), # Use the updated past_history
-            st.session_state.session_data # Pass the entire session_data
+            st.session_state.session_data.get('past_history', []),
+            st.session_state.session_data
         )
 
     # --- Step 8: Displaying the Results ---
     
     # 8a. The Verdict: Display the risk level prominently
-    st.markdown(f"## ⚠️ {risk_level} {_("overall_assessment")}")
-    # The progress bar for confidence can remain if desired, or be removed
-    # st.progress(int(confidence * 100))
+
+    assessment_text = _("overall_assessment")
+    st.markdown(f"## ⚠️ {risk_level} {assessment_text}")
     
     # 8b. The Action: Display the most important recommendation
-    # Removed the static recommendation and old conditional messages.
-    # Now using dynamic recommendations based on risk level and user's city.
     st.write(_("recommended_next_steps"))
     if "High" in risk_level:
         st.error(_("seek_immediate_attention"), icon="🚨")
@@ -276,7 +274,7 @@ elif st.session_state.stage == 'results':
         st.success(_("home_care_sufficient"), icon="✅")
 
     # Get user's city for recommendations (assuming it's part of user_profile or session_data)
-    user_city = st.session_state.user_profile.get('city', 'Pune') # Default to Pune if not available
+    user_city = st.session_state.user_profile.get('city', 'Pune')
     
     dynamic_recommendations = get_recommendations(risk_level, user_city)
     if dynamic_recommendations:
@@ -286,29 +284,35 @@ elif st.session_state.stage == 'results':
     
     # 8c. The Explanation: Expandable section for details
     with st.expander(_("view_analysis_details")):
-        st.write(f"**{_("possible_disease")}** {possible_disease}")
-        st.write(f"**{_("ai_reasoning")}** {reason}")
+        disease_text=_("possible_disease")
+        ai_text=_("ai_reasoning")
+        
+        # Displaying multiple possible diseases
+        if possible_diseases and possible_diseases[0] != 'Unknown':
+            st.write(f"**{disease_text}** {', '.join(possible_diseases)}")
+        else:
+            st.write(f"**{disease_text}** {_('Unknown')}")
+
+        st.write(f"**{ai_text}** {reason}")
         
         if st.session_state.session_data.get('report_data') and st.session_state.session_data['report_data'].get('structured_data'):
-            st.write(f"**{_("extracted_report_data")}**")
+            report_text=_("extracted_report_data")
+            st.write(f"**{report_text}**")
             for key, value in st.session_state.session_data['report_data']['structured_data'].items():
                 st.write(f"- {key.replace('_', ' ').title()}: {value}")
 
             user_age = st.session_state.user_profile.get('age')
             report_explanation = generate_report_explanation(st.session_state.session_data['report_data']['structured_data'], user_age)
-            st.write(f"**{_("report_explanation")}**")
+            explanation_text=_("report_explanation")
+            st.write(f"**{explanation_text}**")
             st.write(report_explanation)
 
             diet_recommendations = get_dietary_recommendations(st.session_state.session_data['report_data']['structured_data'])
             if diet_recommendations:
-                st.write(f"**{_("dietary_recommendations")}**")
+                diet_text=_("dietary_recommendations")
+                st.write(f"**{diet_text}**")
                 for rec in diet_recommendations:
                     st.write(f"- {rec}")
-
-        if similar_cases:
-            st.write(f"**{_("top_5_similar_cases")}**")
-            similar_df = pd.DataFrame(similar_cases)
-            st.dataframe(similar_df)
 
     # --- Final Features ---
     st.subheader(_("your_health_passport"))
@@ -354,7 +358,8 @@ elif st.session_state.stage == 'chatbot_questions':
     with st.form(key="chatbot_form"):
         for symptom_keyword in final_symptom_set_for_questions:
             if symptom_keyword in CHATBOT_QUESTIONS:
-                st.subheader(f"{_("regarding")} {symptom_keyword.title()}:")
+                regarding_text=_("regarding")
+                st.subheader(f"{regarding_text} {symptom_keyword.title()}:")
                 for question_obj in CHATBOT_QUESTIONS[symptom_keyword]:
                     question_id = question_obj['id']
                     question_text = question_obj['question']

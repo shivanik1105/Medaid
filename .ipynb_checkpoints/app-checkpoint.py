@@ -106,10 +106,7 @@ elif st.session_state.stage == 'analysis':
     
     with st.expander("View Analysis Details"):
         st.write(f"**AI Reasoning:** {reason}")
-        if similar_cases:
-            st.write("**Top 5 Similar Past Cases:**")
-            similar_df = pd.DataFrame(similar_cases)
-            st.dataframe(similar_df)
+        
 
     st.subheader("Recommended Next Steps")
     if "High" in risk_level:
