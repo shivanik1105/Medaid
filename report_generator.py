@@ -1,89 +1,84 @@
 # report_generator.py
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.lib import colors
-from io import BytesIO
+from fpdf import FPDF
 from datetime import datetime
+import json
 
-def generate_pdf_report(user_profile, session_data):
-    """
-    Generates a PDF summary of the consultation session.
-    """
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
+class PDFReport(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 16)
+        self.cell(0, 10, 'Rural Health Assistant - Medical Report', 0, 1, 'C')
+        self.set_font('Arial', '', 12)
+        self.cell(0, 10, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}', 0, 1, 'C')
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+def generate_pdf_report(user_data, session_data):
+    pdf = PDFReport()
+    pdf.add_page()
     
-    # Custom styles
-    title_style = ParagraphStyle(name='Title', fontSize=24, alignment=TA_CENTER, spaceAfter=20)
-    header_style = ParagraphStyle(name='Header', fontSize=14, alignment=TA_LEFT, spaceAfter=10, fontName='Helvetica-Bold')
-    body_style = styles['BodyText']
+    # User Information
+    pdf.set_font('Arial', 'B', 14)
+    pdf.cell(0, 10, 'Patient Information', 0, 1)
+    pdf.set_font('Arial', '', 12)
+    pdf.cell(0, 10, f'Name: {user_data.get("name", "N/A")}', 0, 1)
+    pdf.cell(0, 10, f'Age: {user_data.get("age", "N/A")}', 0, 1)
+    pdf.cell(0, 10, f'Email: {user_data.get("email", "N/A")}', 0, 1)
+    pdf.cell(0, 10, f'Location: {user_data.get("city", "")} {user_data.get("pincode", "")}', 0, 1)
+    pdf.ln(10)
     
-    story = []
+    # Assessment Results
+    pdf.set_font('Arial', 'B', 14)
+    pdf.cell(0, 10, 'Assessment Results', 0, 1)
+    pdf.set_font('Arial', '', 12)
     
-    # --- Title ---
-    story.append(Paragraph("AI Health Triage Summary", title_style))
-    story.append(Spacer(1, 0.25 * 72)) # 0.25 inch space
-
-    # --- User Details ---
-    story.append(Paragraph("Patient Information", header_style))
-    user_details = [
-        ["Name:", user_profile.get('name', 'N/A')],
-        ["Age:", str(user_profile.get('age', 'N/A'))],
-        ["Date:", datetime.now().strftime("%Y-%m-%d %H:%M")]
-    ]
-    user_table = Table(user_details, colWidths=[1.5*72, 4*72])
-    user_table.setStyle(TableStyle([
-        ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-    ]))
-    story.append(user_table)
-    story.append(Spacer(1, 0.25 * 72))
-
-    # --- Triage Results ---
-    triage_result = session_data.get('triage_result', {})
-    story.append(Paragraph("Triage Assessment", header_style))
-    risk_level = triage_result.get('risk_level', 'N/A')
+    triage_result = session_data.get('session_data', {}).get('triage_result', {})
+    risk_level = triage_result.get('risk_level', 'Unknown')
+    risk_proba = triage_result.get('risk_proba', 0)
+    reason = triage_result.get('reason', '')
     
-    # Color code the risk level
-    if "High" in risk_level:
-        risk_color = colors.HexColor("#ff4b4b") # Streamlit's error color
-    elif "Moderate" in risk_level:
-        risk_color = colors.HexColor("#ffc400") # Streamlit's warning color
-    else:
-        risk_color = colors.HexColor("#2e9a6f") # Streamlit's success color
-
-    risk_style = ParagraphStyle(name='Risk', fontSize=12, alignment=TA_LEFT, textColor=risk_color, fontName='Helvetica-Bold')
-
-    triage_details = [
-        [Paragraph("<b>Overall Risk Level:</b>", body_style), Paragraph(risk_level, risk_style)],
-        [Paragraph("<b>Confidence:</b>", body_style), Paragraph(f"{triage_result.get('confidence', 0)*100:.0f}%", body_style)],
-        [Paragraph("<b>AI Reasoning:</b>", body_style), Paragraph(triage_result.get('reason', 'N/A'), body_style)],
-    ]
-    triage_table = Table(triage_details, colWidths=[1.5*72, 4*72])
-    triage_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
-    story.append(triage_table)
-    story.append(Spacer(1, 0.25 * 72))
-
-    # --- User Provided Information ---
-    story.append(Paragraph("Information Provided by User", header_style))
-    info_details = [
-        ["Current Symptoms:", session_data.get('current_symptoms_text', 'N/A')],
-        ["Past History:", ", ".join(session_data.get('past_history', ['N/A']))],
-        ["Report Data:", str(session_data.get('report_data', 'No report uploaded'))],
-    ]
-    info_table = Table(info_details, colWidths=[1.5*72, 4*72])
-    info_table.setStyle(TableStyle([
-        ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-    ]))
-    story.append(info_table)
-
-    doc.build(story)
+    pdf.cell(0, 10, f'Risk Level: {risk_level} ({risk_proba:.0%} probability)', 0, 1)
+    pdf.multi_cell(0, 10, f'Reason: {reason}')
+    pdf.ln(5)
     
-    buffer.seek(0)
-    return buffer.getvalue()
+    # Possible Conditions
+    conditions = triage_result.get('possible_conditions', [])
+    if conditions:
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 10, 'Possible Conditions:', 0, 1)
+        pdf.set_font('Arial', '', 12)
+        for condition in conditions:
+            disease = condition.get('disease', 'Unknown')
+            confidence = condition.get('confidence', 0)
+            pdf.cell(0, 10, f'- {disease} ({confidence:.0%} confidence)', 0, 1)
+        pdf.ln(5)
+    
+    # Recommendations
+    recommendations = triage_result.get('recommendations', [])
+    if recommendations:
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 10, 'Recommendations:', 0, 1)
+        pdf.set_font('Arial', '', 12)
+        for rec in recommendations:
+            pdf.cell(0, 10, f'- {rec}', 0, 1)
+        pdf.ln(5)
+    
+    # Location Information
+    if user_data.get('city') or user_data.get('pincode'):
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 10, 'Location Information:', 0, 1)
+        pdf.set_font('Arial', '', 12)
+        if user_data.get('city'):
+            pdf.cell(0, 10, f'City: {user_data.get("city")}', 0, 1)
+        if user_data.get('pincode'):
+            pdf.cell(0, 10, f'Pincode: {user_data.get("pincode")}', 0, 1)
+        pdf.ln(5)
+    
+    # Disclaimer
+    pdf.set_font('Arial', 'I', 10)
+    pdf.multi_cell(0, 10, 'Disclaimer: This report is generated by an AI assistant and should not be considered a substitute for professional medical advice. Please consult with a qualified healthcare provider for proper diagnosis and treatment.')
+    
+    return pdf.output(dest='S').encode('latin1')

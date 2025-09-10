@@ -1,382 +1,664 @@
-# app.py
-import streamlit as st
-import pandas as pd
-import ast
-from database import get_user_by_email, create_user, update_user_history, update_user_report_data
-from backend_processing import run_prediction_engine, merge_and_extract_symptoms
-from report_generator import generate_pdf_report
-from report_processor import analyze_medical_report, generate_report_explanation
-from recommendations import get_dietary_recommendations, get_recommendations
-from language_strings import LANGUAGE_STRINGS # New import
+import os
+import sys
+import tempfile
+import traceback
+from datetime import datetime
 
-# --- Chatbot Question Definitions (Simplified for now) ---
-CHATBOT_QUESTIONS = {
-    "chest pain": [
-        {"id": "chest_pain_duration", "question": "Have you had chest pain for more than 2 days?", "type": "radio", "options": ["Yes", "No"]},
-        {"id": "chest_pain_severity", "question": "On a scale of 1-10, how severe is your chest pain?", "type": "slider", "min": 1, "max": 10},
-    ],
-    "fever": [
-        {"id": "fever_exceeded_101", "question": "Has your fever exceeded 101°F?", "type": "radio", "options": ["Yes", "No"]},
-        {"id": "fever_duration", "question": "How many days have you had a fever?", "type": "number", "min": 0, "max": 30},
-    ],
-    "weakness": [
-        {"id": "feeling_dizzy", "question": "Are you feeling weak or dizzy?", "type": "radio", "options": ["Yes", "No"]},
-    ]
-    # Add more questions for other symptoms/conditions
+from dotenv import load_dotenv
+load_dotenv()
+
+import streamlit as st
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(ROOT)
+
+# Local modules (optional)
+try:
+    from report_processor import ReportProcessor
+except Exception:
+    ReportProcessor = None
+
+try:
+    import backend_processing
+    integrate_report_and_run_assessment = backend_processing.integrate_report_and_run_assessment
+    handle_user_message = backend_processing.handle_user_message
+except Exception:
+    integrate_report_and_run_assessment = None
+    handle_user_message = None
+
+try:
+    from database import get_user_by_email, create_user, update_user_history, update_user_report_data
+except Exception:
+    get_user_by_email = create_user = update_user_history = update_user_report_data = None
+
+try:
+    from report_generator import generate_pdf_report
+except Exception:
+    generate_pdf_report = None
+
+# recommendations.py should expose get_recommendations (Google or OSM fallback)
+try:
+    from recommendations import get_recommendations
+except Exception:
+    def get_recommendations(risk, user_city="", user_state="", user_pincode=""):
+        return []
+
+# Map embed key (prefer MAPS_EMBED_KEY, fallback to GOOGLE_API_KEY)
+MAPS_EMBED_KEY = os.getenv("MAPS_EMBED_KEY") or os.getenv("GOOGLE_API_KEY")
+
+# ---------------- UI helpers ----------------
+def show_emergency_banner():
+    st.markdown("""
+    <div style='background:#b30000;padding:12px;border-radius:8px;color:white;margin-bottom:10px'>
+      <h3 style='margin:0'>🚨 EMERGENCY — SEEK IMMEDIATE CARE</h3>
+      <div style='font-size:14px'>Call emergency services immediately or go to the nearest hospital.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_assessment_card(assessment: dict):
+    rl = assessment.get("risk_level", "Unknown")
+    proba = assessment.get("risk_proba", 0.0)
+    color = {"Emergency":"#b30000","High":"#ff4d4d","Medium":"#ffb84d","Low":"#4caf50"}.get(rl,"#777")
+    st.markdown(f"<div style='padding:12px;border-radius:10px;background:#0f1720;color:#e6eef8'>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='color:{color};margin:6px 0'>{rl} risk — {proba:.0%} probability</h3>", unsafe_allow_html=True)
+    reason = assessment.get("reason","")
+    if reason:
+        st.markdown(f"<div style='color:#cbd5e1;margin-bottom:8px'>{reason}</div>", unsafe_allow_html=True)
+
+    conds = assessment.get("possible_conditions", [])
+    if conds:
+        badges = ""
+        for c in conds:
+            name = c.get("disease","Unknown")
+            conf = c.get("confidence", 0.0)
+            badges += f"<span style='display:inline-block;margin:4px 6px;padding:6px 10px;border-radius:14px;background:#111827;color:#fff;font-size:13px'>{name} {conf:.0%}</span>"
+        st.markdown(badges, unsafe_allow_html=True)
+
+    st.markdown("### Recommendations")
+    recs = assessment.get("recommendations", []) or []
+    if recs:
+        for r in recs:
+            st.markdown(f"- {r}")
+    else:
+        st.markdown("- Follow up with local health provider")
+
+    with st.expander("Show detailed JSON"):
+        st.json(assessment)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def render_facility_card(f):
+    """
+    f may be a dict (enriched) or a string.
+    If dict, expect keys: name,address,phone,distance_km,maps_url,lat,lng
+    """
+    if isinstance(f, dict):
+        name = f.get("name","Unknown")
+        addr = f.get("address","")
+        phone = f.get("phone")
+        dist = f.get("distance_km")
+        maps_url = f.get("maps_url") or f.get("maps") or f.get("maps_link")
+        st.markdown(f"**{name}**")
+        if addr:
+            st.markdown(f"{addr}")
+        if dist:
+            st.markdown(f"Distance: {dist} km")
+        if phone:
+            st.markdown(f"Phone: {phone} — [Call](tel:{phone})")
+        if maps_url:
+            st.markdown(f"[Open in map]({maps_url})")
+        st.markdown("---")
+    else:
+        st.markdown(f"- {f}")
+
+def collect_past_history():
+    """Collect past medical history after successful login"""
+    st.subheader("📋 Past Medical History")
+    st.markdown("Help us provide better assessment by sharing your medical history:")
+    
+    # Common conditions checklist
+    st.markdown("**Select any conditions you have or have had:**")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        diabetes = st.checkbox("Diabetes")
+        hypertension = st.checkbox("High Blood Pressure")
+        heart_disease = st.checkbox("Heart Disease")
+        asthma = st.checkbox("Asthma")
+        kidney_disease = st.checkbox("Kidney Disease")
+        
+    with col2:
+        cancer = st.checkbox("Cancer")
+        stroke = st.checkbox("Stroke")
+        liver_disease = st.checkbox("Liver Disease")
+        thyroid = st.checkbox("Thyroid Disorder")
+        mental_health = st.checkbox("Mental Health Condition")
+    
+    # Additional conditions
+    other_conditions = st.text_area(
+        "Other conditions or medications (optional):",
+        placeholder="E.g., Allergies to penicillin, Previous surgeries, Current medications",
+        height=80
+    )
+    
+    # Family history
+    family_history = st.text_area(
+        "Family medical history (optional):",
+        placeholder="E.g., Family history of diabetes, heart disease, cancer",
+        height=60
+    )
+    
+    if st.button("Save Medical History", type="primary"):
+        # Compile the history
+        conditions = []
+        if diabetes: conditions.append("Diabetes")
+        if hypertension: conditions.append("High Blood Pressure")
+        if heart_disease: conditions.append("Heart Disease")
+        if asthma: conditions.append("Asthma")
+        if kidney_disease: conditions.append("Kidney Disease")
+        if cancer: conditions.append("Cancer")
+        if stroke: conditions.append("Stroke")
+        if liver_disease: conditions.append("Liver Disease")
+        if thyroid: conditions.append("Thyroid Disorder")
+        if mental_health: conditions.append("Mental Health Condition")
+        
+        if other_conditions:
+            conditions.extend([x.strip() for x in other_conditions.split(',') if x.strip()])
+        
+        # Update user's history
+        st.session_state.user["past_history"] = conditions
+        if family_history:
+            st.session_state.user["family_history"] = family_history
+        
+        # Save to database if available
+        if update_user_history:
+            try:
+                record = {
+                    "note": "Medical history collection",
+                    "conditions": conditions,
+                    "family_history": family_history
+                }
+                update_user_history(st.session_state.user.get("_id"), conditions, record)
+                st.success("✅ Medical history saved successfully!")
+            except Exception as e:
+                st.warning(f"History saved locally. Database error: {e}")
+        else:
+            st.success("✅ Medical history saved for this session!")
+        
+        # Set flag to indicate history has been collected
+        st.session_state.user["history_collected"] = True
+        st.rerun()
+
+# ---------------- Session state ----------------
+st.set_page_config(page_title="Rural Health Assistant", layout="wide")
+
+# Improved CSS for better visibility
+st.markdown("""
+<style>
+/* Global app styling */
+.stApp {
+    background-color: #f8fafc;
 }
 
-# --- Placeholder for Teammate Modules ---
-# The analyze_report_placeholder is replaced by analyze_medical_report from report_processor.py
-# def analyze_report_placeholder(uploaded_file):
-#     """Placeholder for Teammate 1's Report Analyzer."""
-#     st.toast(f"Analyzing report: {uploaded_file.name}...")
-#     return {"Hemoglobin": "11.5 g/dL (Normal)", "WBC Count": "12,000 /mcL (High)"}
+/* Fix textarea visibility issues */
+.stTextArea > div > div > textarea {
+    background-color: #ffffff !important;
+    color: #1f2937 !important;
+    border: 2px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    padding: 16px !important;
+    font-size: 16px !important;
+    line-height: 1.5 !important;
+    min-height: 120px !important;
+}
 
-#change this 
-def get_recommendations_placeholder(risk_level, city="Pune"):
-    """Placeholder for Teammate 2's Hospital Recommender."""
-    if "High" in risk_level:
-        return ["Ruby Hall Clinic, Sassoon Road", "Jehangir Hospital, Pune Station", "Sahyadri Super Speciality Hospital, Deccan"]
-    elif "Moderate" in risk_level:
-        return ["Your local General Practitioner", "A nearby Polyclinic for consultation"]
-    return []
+.stTextArea > div > div > textarea:focus {
+    border-color: #3b82f6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+    outline: none !important;
+}
 
-# --- State Machine & Session Setup ---
-if 'stage' not in st.session_state: st.session_state.stage = 'login'
-if 'user_profile' not in st.session_state: st.session_state.user_profile = None
-if 'session_data' not in st.session_state: st.session_state.session_data = {}
+.stTextArea > div > div > textarea::placeholder {
+    color: #9ca3af !important;
+    opacity: 1 !important;
+}
 
-# Initialize sub-stage for consultation flow
-if 'consultation_sub_stage' not in st.session_state.session_data: 
-    st.session_state.session_data['consultation_sub_stage'] = 'collect_current_symptoms'
+/* Button styling */
+.stButton > button {
+    background: linear-gradient(90deg, #3b82f6, #2563eb) !important;
+    color: white !important;
+    border: none !important;
+    padding: 12px 24px !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s !important;
+}
 
-# --- Main App UI ---
-st.set_page_config(layout="wide", page_title="AI Health Triage")
-st.title("🩺 AI Health Triage System")
+.stButton > button:hover {
+    background: linear-gradient(90deg, #2563eb, #1d4ed8) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
+}
 
-# Helper function to get translated string
-def _(key):
-    lang = st.session_state.user_profile.get('language', 'English') if st.session_state.user_profile else 'English'
-    return LANGUAGE_STRINGS.get(lang, LANGUAGE_STRINGS["English"]).get(key, key)
+/* Form styling */
+.stForm {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
 
-# =======================================
-# STAGE 1: LOGIN
-# =======================================
-if st.session_state.stage == 'login':
-    st.info(_("welcome_message"))
-    with st.form(key="login_form"):
-        name = st.text_input(_("full_name"))
-        age = st.number_input(_("age"), 1, 120)
-        email = st.text_input(_("email_address"))
-        language = st.selectbox(_("preferred_language"), ["English", "Marathi", "Hindi"])
+/* Card styling for results */
+.result-card {
+    background: white;
+    padding: 20px;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 16px;
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background-color: #f1f5f9;
+}
+
+/* Input field styling */
+.stTextInput > div > div > input {
+    background-color: #ffffff !important;
+    color: #1f2937 !important;
+    border: 2px solid #e5e7eb !important;
+    border-radius: 6px !important;
+    padding: 12px !important;
+}
+
+.stTextInput > div > div > input:focus {
+    border-color: #3b82f6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+}
+
+/* Checkbox styling */
+.stCheckbox > label {
+    color: #374151 !important;
+    font-weight: 500 !important;
+}
+
+/* Success/Error message styling */
+.stSuccess {
+    background-color: #f0fdf4 !important;
+    border: 1px solid #bbf7d0 !important;
+    border-radius: 8px !important;
+}
+
+.stError {
+    background-color: #fef2f2 !important;
+    border: 1px solid #fecaca !important;
+    border-radius: 8px !important;
+}
+
+.stWarning {
+    background-color: #fffbeb !important;
+    border: 1px solid #fed7aa !important;
+    border-radius: 8px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🏥 Rural Health Assistant")
+st.markdown("**AI-powered health assessment for rural communities**")
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "report_data" not in st.session_state:
+    st.session_state.report_data = None
+if "final_assessment" not in st.session_state:
+    st.session_state.final_assessment = None
+if "conversation" not in st.session_state:
+    st.session_state.conversation = []
+if "last_triage_record" not in st.session_state:
+    st.session_state.last_triage_record = None
+
+# ---------------- Sidebar: Login/Register ----------------
+with st.sidebar:
+    st.header("👤 Account")
+    
+    if not st.session_state.user:
+        st.subheader("Login / Register")
+        su_name = st.text_input("Full Name", placeholder="Enter your full name")
+        su_age = st.number_input("Age", min_value=0, max_value=120, value=25)
+        su_email = st.text_input("Email", placeholder="your.email@example.com")
+        su_lang = st.selectbox("Preferred Language", ["English", "Hindi"])
         
-        # New: Input Mode Selection
-        input_mode = st.radio("Select Input Mode", ["Text", "Voice", "Report"], key="input_mode_selector")
-        
-        submitted = st.form_submit_button(_("start_session"))
-        if submitted:
-            if name and age and email:
-                with st.spinner(_("setting_up_session")):
-                    user = get_user_by_email(email)
-                    st.session_state.user_profile = user if user else create_user(name, age, email, language)
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Register", type="primary"):
+                if not su_name or not su_email:
+                    st.error("Please provide name and email")
+                else:
+                    existing = None
+                    try:
+                        existing = get_user_by_email(su_email) if get_user_by_email else None
+                    except Exception:
+                        existing = None
                     
-                    if st.session_state.user_profile is None:
-                        st.error(_("database_connection_error"))
+                    if existing:
+                        st.session_state.user = existing
+                        st.success("Logged in existing user!")
                     else:
-                        st.session_state.stage = 'consultation'
-                        st.session_state.session_data['input_mode'] = input_mode # Store selected input mode
-                st.rerun()
-
-# =======================================
-# STAGE 2: CONSULTATION (DATA GATHERING)
-# =======================================
-elif st.session_state.stage == 'consultation':
-    st.header(_("consultation_welcome").format(name=st.session_state.user_profile['name']))
-
-    # Use sub-stages to manage the consultation flow
-    if st.session_state.session_data['consultation_sub_stage'] == 'collect_current_symptoms':
-        with st.form("current_symptoms_form"):
-            current_input_mode = st.session_state.session_data.get('input_mode', 'Text') # Default to Text
-
-            st.subheader(_("symptoms_question"))
-            symptoms_text = ""
-            uploaded_audio = None
-            uploaded_report = None
-
-            if current_input_mode == "Text":
-                symptoms_text = st.text_area(_("describe_symptoms"), height=150, key="symptoms_text_area")
-            elif current_input_mode == "Voice":
-                uploaded_audio = st.file_uploader(_("upload_voice_recording"), type=['mp3', 'wav'], key="voice_uploader")
-                if uploaded_audio:
-                    st.info(_("voice_input_received"))
-                    st.session_state.session_data['voice_input'] = uploaded_audio.name
-                    symptoms_text = "Voice input provided (awaiting transcription)." # Placeholder
-            elif current_input_mode == "Report":
-                uploaded_report = st.file_uploader(_("upload_report"), type=['pdf', 'png', 'jpg'], key="report_uploader")
-                if uploaded_report:
-                    st.info(_("processing_report"))
-                    report_analysis_result = analyze_medical_report(uploaded_report)
-                    st.session_state.session_data['report_data'] = report_analysis_result
-                    st.success(_("report_processed_success"))
-                    # Update user's top-level report_data in DB
-                    update_user_report_data(st.session_state.user_profile['_id'], report_analysis_result['structured_data'])
+                        if create_user:
+                            try:
+                                created = create_user(su_name, int(su_age), su_email, su_lang)
+                                st.session_state.user = created
+                                st.success("Account created successfully!")
+                            except Exception as e:
+                                st.session_state.user = {
+                                    "_id": su_email, 
+                                    "name": su_name, 
+                                    "age": int(su_age), 
+                                    "email": su_email, 
+                                    "language": su_lang, 
+                                    "past_history": []
+                                }
+                                st.success("Account created (local session)")
+                        else:
+                            st.session_state.user = {
+                                "_id": su_email, 
+                                "name": su_name, 
+                                "age": int(su_age), 
+                                "email": su_email, 
+                                "language": su_lang, 
+                                "past_history": []
+                            }
+                            st.success("Account created (local session)")
+                    st.rerun()
+        
+        with col2:
+            if st.button("Login"):
+                if not su_email:
+                    st.error("Please provide email")
                 else:
-                    st.warning(_("please_upload_report"))
-
-            submit_current_symptoms = st.form_submit_button(_("submit_for_analysis"))
-
-            if submit_current_symptoms:
-                st.session_state.session_data['current_symptoms_text'] = symptoms_text
-                st.session_state.session_data['consultation_sub_stage'] = 'handle_past_history'
-                st.rerun()
-
-    elif st.session_state.session_data['consultation_sub_stage'] == 'handle_past_history':
-        with st.form("past_history_form"):
-            st.subheader(_("past_history_question"))
-            past_history_from_db = st.session_state.user_profile.get('past_history', [])
-            is_new_user_history = not bool(past_history_from_db)
-
-            if is_new_user_history:
-                st.info(_("ask_previous_issues"))
-                has_previous_issues = st.radio("", ["Yes", "No"], key="has_prev_issues")
-
-                selected_conditions = []
-                if has_previous_issues == "Yes":
-                    common_conditions = ["Diabetes", "Hypertension (High BP)", "Asthma", "Heart Disease", "Anemia", "Thyroid Issues"]
-                    st.write(_("ask_common_conditions").format(conditions_list=", ".join(common_conditions)))
-                    selected_conditions = st.multiselect(
-                        _("select_conditions"), 
-                        options=common_conditions,
-                        key="new_user_conditions"
-                    )
-            else: # Existing user
-                st.info(_("confirm_past_history").format(history_list=", ".join(past_history_from_db)))
-                common_conditions = ["Diabetes", "Hypertension (High BP)", "Asthma", "Heart Disease", "Anemia", "Thyroid Issues"]
-                all_possible_options = sorted(list(set(common_conditions + past_history_from_db)))
-                selected_conditions = st.multiselect(
-                    _("select_conditions"), 
-                    options=all_possible_options, 
-                    default=past_history_from_db,
-                    key="existing_user_conditions"
-                )
-            
-            submit_past_history = st.form_submit_button(_("confirm_update_history"))
-
-            if submit_past_history:
-                st.session_state.session_data['past_history'] = selected_conditions
-                st.session_state.session_data['consultation_sub_stage'] = 'collect_report_optional' # New sub-stage for report
-                st.rerun()
-
-    elif st.session_state.session_data['consultation_sub_stage'] == 'collect_report_optional':
-        with st.form("report_optional_form"):
-            st.subheader(_("recent_report_question"))
-            # We already handled report upload in 'collect_current_symptoms' if input_mode was 'Report'
-            # So this section is for 'Text' or 'Voice' users who might also have a report.
-
-            uploaded_report_optional = st.file_uploader(_("upload_report"), type=['pdf', 'png', 'jpg'], key="report_uploader_optional")
-            
-            if uploaded_report_optional:
-                st.info(_("processing_report"))
-                report_analysis_result = analyze_medical_report(uploaded_report_optional)
-                st.session_state.session_data['report_data'] = report_analysis_result
-                st.success(_("report_processed_success"))
-                # Update user's top-level report_data in DB
-                update_user_report_data(st.session_state.user_profile['_id'], report_analysis_result['structured_data'])
-
-            col_submit_report, col_skip_report = st.columns(2)
-            with col_submit_report:
-                submit_report_optional = st.form_submit_button(_("submit_for_analysis"))
-            with col_skip_report:
-                skip_report = st.form_submit_button(_("no_skip_report"))
-
-            if submit_report_optional or skip_report:
-                # This is where the old 'consultation_form' submit logic goes
-                symptoms_text = st.session_state.session_data.get('current_symptoms_text', '')
-                selected_conditions = st.session_state.session_data.get('past_history', [])
-                # uploaded_report is already processed if input mode was 'Report'
-                # If this sub-stage was entered, it means input_mode was Text/Voice and report might be optional.
-                
-                # The update_user_history call is now in the 'results' stage for full session data.
-                
-                # Check for chatbot questions before moving to results
-                final_symptom_set_for_questions = merge_and_extract_symptoms(
-                    symptoms_text,
-                    selected_conditions,
-                    st.session_state.session_data.get('report_data', {}).get('structured_data', {})
-                )
-                
-                relevant_questions_found = False
-                for symptom in final_symptom_set_for_questions:
-                    if symptom in CHATBOT_QUESTIONS:
-                        relevant_questions_found = True
-                        break
-
-                if relevant_questions_found:
-                    st.session_state.session_data['final_symptom_set_for_questions'] = final_symptom_set_for_questions
-                    st.session_state.stage = 'chatbot_questions'
-                else:
-                    st.session_state.stage = 'results'
-                st.rerun()
-
-# =======================================
-# STAGE 3: AI ANALYSIS & RESULTS (Renamed from 'analysis')
-# =======================================
-elif st.session_state.stage == 'results':
-    st.header(_("final_triage_results"))
-    with st.spinner(_("running_ai_analysis")):
-        # Step 5: Merge Data Sources
-        current_symptoms_text = st.session_state.session_data.get('current_symptoms_text', '')
-        past_history_list = st.session_state.session_data.get('past_history', [])
-        report_structured_data = st.session_state.session_data.get('report_data', {}).get('structured_data', {})
-        
-        final_symptom_set = merge_and_extract_symptoms(
-            current_symptoms_text,
-            past_history_list,
-            report_structured_data
-        )
-        st.session_state.session_data['final_symptom_set'] = final_symptom_set
-
-        # Step 7: AI Engine Runs
-        prediction_output = run_prediction_engine(st.session_state.session_data, st.session_state.user_profile)
-        
-        risk_level = prediction_output['risk_level']
-        reason = prediction_output['reason']
-        confidence = prediction_output.get('confidence', 0.0)
-        possible_diseases = prediction_output.get('possible_diseases', ['Unknown'])
-        # The 'similar_cases' output is now just a note from the RAG model.
-        # We don't display the table anymore.
-        # similar_cases = prediction_output.get('similar_cases', {}) 
-        
-        # Step 9: Update Health Passport (Store results for PDF)
-        st.session_state.session_data['triage_result'] = prediction_output
-
-        # Now that all session data is complete, update the user history in the database
-        update_user_history(
-            st.session_state.user_profile['_id'], 
-            st.session_state.session_data.get('past_history', []),
-            st.session_state.session_data
-        )
-
-    # --- Step 8: Displaying the Results ---
-    
-    # 8a. The Verdict: Display the risk level prominently
-
-    assessment_text = _("overall_assessment")
-    st.markdown(f"## ⚠️ {risk_level} {assessment_text}")
-    
-    # 8b. The Action: Display the most important recommendation
-    st.write(_("recommended_next_steps"))
-    if "High" in risk_level:
-        st.error(_("seek_immediate_attention"), icon="🚨")
-    elif "Moderate" in risk_level:
-        st.warning(_("consult_doctor_24_hours"), icon="⚠️")
+                    try:
+                        u = get_user_by_email(su_email) if get_user_by_email else None
+                    except Exception:
+                        u = None
+                    
+                    if u:
+                        st.session_state.user = u
+                        st.success("Logged in successfully!")
+                        st.rerun()
+                    else:
+                        st.error("User not found. Please register first.")
     else:
-        st.success(_("home_care_sufficient"), icon="✅")
-
-    # Get user's city for recommendations (assuming it's part of user_profile or session_data)
-    user_city = st.session_state.user_profile.get('city', 'Pune')
-    
-    dynamic_recommendations = get_recommendations(risk_level, user_city)
-    if dynamic_recommendations:
-        st.write("**Suggested Facilities/Actions:**")
-        for item in dynamic_recommendations:
-            st.write(f"- {item}")
-    
-    # 8c. The Explanation: Expandable section for details
-    with st.expander(_("view_analysis_details")):
-        disease_text=_("possible_disease")
-        ai_text=_("ai_reasoning")
+        # User is logged in
+        st.success(f"Welcome, {st.session_state.user.get('name')}!")
+        st.markdown(f"**Email:** {st.session_state.user.get('email')}")
+        st.markdown(f"**Age:** {st.session_state.user.get('age')} years")
         
-        # Displaying multiple possible diseases
-        if possible_diseases and possible_diseases[0] != 'Unknown':
-            st.write(f"**{disease_text}** {', '.join(possible_diseases)}")
-        else:
-            st.write(f"**{disease_text}** {_('Unknown')}")
-
-        st.write(f"**{ai_text}** {reason}")
-        
-        if st.session_state.session_data.get('report_data') and st.session_state.session_data['report_data'].get('structured_data'):
-            report_text=_("extracted_report_data")
-            st.write(f"**{report_text}**")
-            for key, value in st.session_state.session_data['report_data']['structured_data'].items():
-                st.write(f"- {key.replace('_', ' ').title()}: {value}")
-
-            user_age = st.session_state.user_profile.get('age')
-            report_explanation = generate_report_explanation(st.session_state.session_data['report_data']['structured_data'], user_age)
-            explanation_text=_("report_explanation")
-            st.write(f"**{explanation_text}**")
-            st.write(report_explanation)
-
-            diet_recommendations = get_dietary_recommendations(st.session_state.session_data['report_data']['structured_data'])
-            if diet_recommendations:
-                diet_text=_("dietary_recommendations")
-                st.write(f"**{diet_text}**")
-                for rec in diet_recommendations:
-                    st.write(f"- {rec}")
-
-    # --- Final Features ---
-    st.subheader(_("your_health_passport"))
-    st.write(_("download_summary"))
-    pdf_data = generate_pdf_report(st.session_state.user_profile, st.session_state.session_data)
-    st.download_button(
-        label=_("download_pdf_summary"),
-        data=pdf_data,
-        file_name=f"Health_Summary_{st.session_state.user_profile['name']}.pdf",
-        mime="application/pdf"
-    )
-
-    # Placeholder for Share via WhatsApp/Email
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Share via WhatsApp", key="share_whatsapp"):
-            st.info("WhatsApp sharing functionality coming soon!")
-    with col2:
-        if st.button("Share via Email", key="share_email"):
-            st.info("Email sharing functionality coming soon!")
-
-    if st.button(_("start_new_consultation")):
-        st.session_state.stage = 'consultation'
-        st.session_state.session_data = {}
-        st.rerun()
-
-    if st.button(_("logout")):
-        st.session_state.stage = 'login'
-        st.session_state.user_profile = None
-        st.session_state.session_data = {}
-        st.rerun()
-
-# =======================================
-# STAGE 4: CHATBOT TARGETED QUESTIONS
-# =======================================
-elif st.session_state.stage == 'chatbot_questions':
-    st.header(_("chatbot_more_questions"))
-    st.info(_("chatbot_info_message"))
-
-    final_symptom_set_for_questions = st.session_state.session_data.get('final_symptom_set_for_questions', [])
-    st.session_state.session_data['chatbot_answers'] = st.session_state.session_data.get('chatbot_answers', {})
-
-    with st.form(key="chatbot_form"):
-        for symptom_keyword in final_symptom_set_for_questions:
-            if symptom_keyword in CHATBOT_QUESTIONS:
-                regarding_text=_("regarding")
-                st.subheader(f"{regarding_text} {symptom_keyword.title()}:")
-                for question_obj in CHATBOT_QUESTIONS[symptom_keyword]:
-                    question_id = question_obj['id']
-                    question_text = question_obj['question']
-                    question_type = question_obj['type']
-
-                    if question_type == "radio":
-                        answer = st.radio(question_text, question_obj['options'], key=question_id)
-                    elif question_type == "slider":
-                        answer = st.slider(question_text, min_value=question_obj['min'], max_value=question_obj['max'], key=question_id)
-                    elif question_type == "number":
-                        answer = st.number_input(question_text, min_value=question_obj['min'], max_value=question_obj['max'], key=question_id)
-                    else:
-                        answer = st.text_input(question_text, key=question_id)
-                    
-                    st.session_state.session_data['chatbot_answers'][question_id] = answer
-        
-        submitted_chatbot = st.form_submit_button(_("submit_answers"))
-        if submitted_chatbot:
-            st.session_state.stage = 'results'
+        if st.button("Logout", type="secondary"):
+            st.session_state.user = None
+            st.session_state.final_assessment = None
             st.rerun()
+        
+        # Show medical history summary if collected
+        if st.session_state.user.get("history_collected"):
+            with st.expander("📋 Medical History", expanded=False):
+                history = st.session_state.user.get("past_history", [])
+                if history:
+                    for condition in history:
+                        st.markdown(f"• {condition}")
+                else:
+                    st.markdown("No conditions recorded")
+                
+                family_hist = st.session_state.user.get("family_history", "")
+                if family_hist:
+                    st.markdown(f"**Family History:** {family_hist}")
+                
+                if st.button("Update History"):
+                    st.session_state.user["history_collected"] = False
+                    st.rerun()
+
+# ---------------- Main Content ----------------
+if not st.session_state.user:
+    st.info("👈 Please login or register in the sidebar to continue")
+    st.stop()
+
+# Check if we need to collect medical history
+if not st.session_state.user.get("history_collected", False):
+    collect_past_history()
+    st.stop()
+
+# Main consultation interface
+col_left, col_right = st.columns([3, 2])
+
+with col_left:
+    st.header("💬 Consultation")
+    
+    with st.form("consultation_form", clear_on_submit=False):
+        st.markdown("**Describe your current symptoms:**")
+        symptoms_text = st.text_area(
+            "Current symptoms",
+            placeholder="Please describe your symptoms in detail. For example:\n• When did they start?\n• How severe are they (1-10)?\n• What makes them better or worse?\n• Any associated symptoms?",
+            height=150,
+            label_visibility="collapsed"
+        )
+        
+        st.markdown("**Upload medical report (optional):**")
+        report_file = st.file_uploader(
+            "Medical report", 
+            type=["pdf", "png", "jpg", "jpeg"],
+            help="Upload any recent medical reports, test results, or prescriptions",
+            label_visibility="collapsed"
+        )
+        
+        st.markdown("**Location for nearby facilities:**")
+        location_input = st.text_input(
+            "Location",
+            placeholder="Enter city name or pincode",
+            help="This helps us find nearby healthcare facilities",
+            label_visibility="collapsed"
+        )
+        
+        analyze_button = st.form_submit_button(
+            "🔍 Analyze Symptoms", 
+            type="primary", 
+            use_container_width=True
+        )
+
+    if analyze_button:
+        if not symptoms_text and not report_file:
+            st.error("Please provide either symptoms description or upload a medical report.")
+        else:
+            with st.spinner("🔍 Analyzing your symptoms and medical history..."):
+                try:
+                    final_symptoms = symptoms_text or ""
+                    report_json = None
+                    
+                    # Process uploaded report
+                    if report_file:
+                        tmpf = tempfile.NamedTemporaryFile(
+                            delete=False, 
+                            suffix=os.path.splitext(report_file.name)[1]
+                        )
+                        tmpf.write(report_file.getbuffer())
+                        tmpf.flush()
+                        tmpf.close()
+                        
+                        try:
+                            if ReportProcessor:
+                                rp = ReportProcessor()
+                                res = rp.process_report(
+                                    tmpf.name, 
+                                    user_data={"name": st.session_state.user.get("name")}
+                                )
+                                if res.get("status") == "success":
+                                    report_json = res.get("data")
+                                    st.success("✅ Medical report processed successfully")
+                                    try:
+                                        if update_user_report_data:
+                                            update_user_report_data(
+                                                st.session_state.user.get("_id"), 
+                                                report_json
+                                            )
+                                    except Exception:
+                                        pass
+                                else:
+                                    st.warning("⚠️ " + str(res.get("message", "")))
+                            else:
+                                st.info("Report processor not available")
+                        except Exception as e:
+                            st.warning(f"⚠️ Report processing failed: {e}")
+                        finally:
+                            try: 
+                                os.unlink(tmpf.name)
+                            except: 
+                                pass
+
+                    st.session_state.report_data = report_json
+
+                    # Prepare user data with medical history
+                    user_data = st.session_state.user.copy()
+                    
+                    # Run assessment with all available data
+                    result = None
+                    if integrate_report_and_run_assessment:
+                        assessment_input = {
+                            "symptoms_text": final_symptoms,
+                            "city": location_input,
+                            "past_history": user_data.get("past_history", []),
+                            "family_history": user_data.get("family_history", ""),
+                            "age": user_data.get("age"),
+                            "user_name": user_data.get("name")
+                        }
+                        result = integrate_report_and_run_assessment(
+                            report_json, 
+                            assessment_input, 
+                            user_data
+                        )
+                    else:
+                        result = {
+                            "status": "error",
+                            "message": "Assessment backend not available",
+                            "debug": "integrate_report_and_run_assessment not available"
+                        }
+
+                    if result.get("status") == "error":
+                        st.error("❌ Assessment error: " + str(result.get("message")))
+                        st.session_state.conversation.append({
+                            "role": "assistant",
+                            "content": f"Assessment error: {result.get('message')}",
+                            "time": datetime.utcnow().isoformat()
+                        })
+                    else:
+                        assessment = result.get("assessment")
+                        st.session_state.final_assessment = assessment
+                        st.success("✅ Assessment complete! Check results on the right →")
+                        
+                        st.session_state.conversation.append({
+                            "role": "assistant",
+                            "content": assessment.get("reason", "Assessment complete"),
+                            "time": datetime.utcnow().isoformat()
+                        })
+                        
+                        # Save triage record
+                        try:
+                            record = {
+                                "user_id": st.session_state.user.get("_id"),
+                                "date": datetime.utcnow().isoformat(),
+                                "current_symptoms": final_symptoms,
+                                "report_data": report_json,
+                                "triage_result": assessment,
+                                "past_history": user_data.get("past_history", [])
+                            }
+                            if update_user_history:
+                                update_user_history(
+                                    st.session_state.user.get("_id"),
+                                    st.session_state.user.get("past_history", []),
+                                    record
+                                )
+                            st.session_state.last_triage_record = record
+                        except Exception:
+                            pass
+
+                except Exception as e:
+                    st.error(f"❌ Assessment failed: {e}")
+                    with st.expander("Error Details"):
+                        st.code(traceback.format_exc())
+
+with col_right:
+    st.header("📊 Assessment Results")
+    
+    if st.session_state.final_assessment:
+        assessment = st.session_state.final_assessment
+        
+        # Show emergency banner if needed
+        if assessment.get("risk_level") == "Emergency":
+            show_emergency_banner()
+        
+        # Show assessment results
+        with st.container():
+            st.markdown('<div class="result-card">', unsafe_allow_html=True)
+            show_assessment_card(assessment)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Show nearby facilities for medium+ risk
+        if assessment.get("risk_level") in ("Medium", "High", "Emergency"):
+            st.markdown("### 🏥 Nearby Healthcare Facilities")
+            
+            if not location_input.strip():
+                st.info("💡 Enter your location in the form to see nearby facilities")
+            else:
+                try:
+                    with st.spinner("Finding nearby facilities..."):
+                        facilities = get_recommendations(
+                            assessment.get("risk_level"),
+                            user_city=location_input,
+                            user_state="Maharashtra",
+                            user_pincode=location_input
+                        )
+
+                    if not facilities:
+                        st.warning("No facilities found for this location. Please try a different city or pincode.")
+                    else:
+                        for f in facilities[:5]:  # Show top 5
+                            with st.container():
+                                st.markdown('<div class="result-card">', unsafe_allow_html=True)
+                                render_facility_card(f)
+                                st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        if len(facilities) > 5:
+                            with st.expander(f"Show all {len(facilities)} facilities"):
+                                for f in facilities[5:]:
+                                    render_facility_card(f)
+                                    
+                except Exception as e:
+                    st.error(f"❌ Could not fetch facilities: {e}")
+    else:
+        st.info("👈 Complete the consultation form to see your health assessment and recommendations")
+
+# Conversation log
+st.markdown("---")
+with st.expander("💬 Conversation History", expanded=False):
+    if st.session_state.conversation:
+        for msg in st.session_state.conversation[-10:]:  # Show last 10 messages
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            time = msg.get("time", "")
+            
+            if role == "assistant":
+                st.markdown(f"**🤖 AI Assistant:** {content}")
+                st.caption(f"Time: {time}")
+            else:
+                st.markdown(f"**👤 You:** {content}")
+                st.caption(f"Time: {time}")
+            st.markdown("---")
+    else:
+        st.info("No conversation history yet")
+
+# Footer
+st.markdown("---")
+st.markdown(
+    "⚠️ **Disclaimer:** This is a prototype AI system for health screening purposes only. "
+    "Always consult with qualified healthcare professionals for medical advice and treatment. "
+    "In case of emergency, contact local emergency services immediately."
+)
