@@ -1,0 +1,360 @@
+{
+  "users": [
+    {
+      "name": "Shivani Kinagi",
+      "age": 20,
+      "email": "ieaijsijk@gmail.com",
+      "language": "English",
+      "past_history": [],
+      "records": [
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-06T13:09:55.099290",
+          "current_symptoms": "stomach pain",
+          "report_data": {
+            "medical_tests": [],
+            "abnormal_results": [],
+            "extracted_text": "",
+            "meta": {}
+          },
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Unknown",
+                "confidence": 0.3
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.3,
+            "reason": "No backend available",
+            "recommendations": [
+              "Consult physician"
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-06T13:35:32.817954",
+          "current_symptoms": "stomach pain",
+          "report_data": {
+            "medical_tests": [],
+            "abnormal_results": [],
+            "extracted_text": "",
+            "meta": {}
+          },
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Unknown",
+                "confidence": 0.3
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.3,
+            "reason": "'str' object has no attribute 'content'",
+            "recommendations": [
+              "Consult physician",
+              "Monitor symptoms",
+              "Visit PHC if worsens"
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-06T14:18:07.402885",
+          "current_symptoms": "stomach pain",
+          "report_data": {
+            "medical_tests": [],
+            "abnormal_results": [],
+            "extracted_text": "",
+            "meta": {}
+          },
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Unknown",
+                "confidence": 0.3
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.3,
+            "reason": "OpenAI call failed: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}\nTraceback (most recent call last):\n  File \"F:\\shivani\\VSCode\\projects\\Medaid\\project\\backend_processing.py\", line 1338, in call_chat\n    resp = client.chat.completions.create(model=model_name, messages=messages, max_tokens=max_tokens, temperature=temperature)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"F:\\shivani\\VSCode\\projects\\Medaid\\aihealth\\Lib\\site-packages\\openai\\_utils\\_utils.py\", line 286, in wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"F:\\shivani\\VSCode\\projects\\Medaid\\aihealth\\Lib\\site-packages\\openai\\resources\\chat\\completions\\completions.py\", line 1147, in create\n    return self._post(\n           ^^^^^^^^^^^\n  File \"F:\\shivani\\VSCode\\projects\\Medaid\\aihealth\\Lib\\site-packages\\openai\\_base_client.py\", line 1259, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"F:\\shivani\\VSCode\\projects\\Medaid\\aihealth\\Lib\\site-packages\\openai\\_base_client.py\", line 1047, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.RateLimitError: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}\n",
+            "recommendations": [
+              "Consult physician",
+              "Monitor symptoms",
+              "Visit PHC if worsens"
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-07T08:04:33.094856",
+          "current_symptoms": "blood from ears",
+          "report_data": {
+            "medical_tests": [],
+            "abnormal_results": [],
+            "extracted_text": "",
+            "meta": {}
+          },
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Skull fracture",
+                "confidence": 0.6
+              },
+              {
+                "disease": "Head injury",
+                "confidence": 0.5
+              },
+              {
+                "disease": "Severe ear infection",
+                "confidence": 0.3
+              }
+            ],
+            "risk_level": "Emergency",
+            "risk_proba": 0.8,
+            "reason": "Bleeding from the ears can indicate a serious head injury or skull fracture requiring immediate medical attention.",
+            "recommendations": [
+              "Call emergency services immediately.",
+              "Do not attempt to clean the ears.",
+              "Keep the patient still and monitor breathing.",
+              "Describe symptoms clearly to emergency responders.",
+              "Note the time bleeding started.",
+              "Provide any relevant medical history if known."
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-07T08:09:06.158297",
+          "current_symptoms": "blood from ears",
+          "report_data": {
+            "medical_tests": [],
+            "abnormal_results": [],
+            "extracted_text": "",
+            "meta": {}
+          },
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Skull fracture",
+                "confidence": 0.6
+              },
+              {
+                "disease": "Head injury",
+                "confidence": 0.5
+              },
+              {
+                "disease": "Severe ear infection",
+                "confidence": 0.3
+              }
+            ],
+            "risk_level": "Emergency",
+            "risk_proba": 0.8,
+            "reason": "Bleeding from the ears can indicate a serious head injury or skull fracture requiring immediate medical attention.",
+            "recommendations": [
+              "Call emergency services immediately.",
+              "Do not attempt to clean the ears.",
+              "Keep the patient still and monitor breathing.",
+              "Describe the situation to emergency responders.",
+              "Note the time bleeding started.",
+              "Provide any relevant medical history if known."
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-07T12:54:16.197772",
+          "current_symptoms": "stomach pain",
+          "report_data": null,
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Gastroenteritis",
+                "confidence": 0.6
+              },
+              {
+                "disease": "Appendicitis",
+                "confidence": 0.2
+              },
+              {
+                "disease": "Food poisoning",
+                "confidence": 0.15
+              },
+              {
+                "disease": "Indigestion",
+                "confidence": 0.05
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.6,
+            "reason": "Stomach pain can indicate various conditions, ranging from mild indigestion to more serious issues like appendicitis.  Further evaluation is needed to determine the exact cause.",
+            "recommendations": [
+              "Drink plenty of fluids",
+              "Avoid solid foods for a few hours",
+              "Rest",
+              "Monitor pain levels",
+              "If pain worsens or persists for more than 24 hours, seek immediate medical attention",
+              "Consider over-the-counter pain relief (if appropriate)"
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-07T12:58:22.067910",
+          "current_symptoms": "stomach pain",
+          "report_data": null,
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Gastroenteritis",
+                "confidence": 0.6
+              },
+              {
+                "disease": "Appendicitis",
+                "confidence": 0.2
+              },
+              {
+                "disease": "Indigestion",
+                "confidence": 0.15
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.6,
+            "reason": "Stomach pain can indicate various conditions, ranging from mild indigestion to more serious issues like appendicitis.  Further assessment is needed to determine the exact cause.",
+            "recommendations": [
+              "Drink plenty of fluids",
+              "Avoid solid foods for a few hours",
+              "Take an over-the-counter pain reliever (e.g., ibuprofen)",
+              "Monitor your symptoms closely",
+              "Seek medical attention if pain worsens or other symptoms develop (fever, vomiting)",
+              "Contact your doctor or visit an urgent care clinic for evaluation"
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-07T13:14:08.394437",
+          "current_symptoms": "stomach pain",
+          "report_data": null,
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Gastroenteritis",
+                "confidence": 0.6
+              },
+              {
+                "disease": "Appendicitis",
+                "confidence": 0.2
+              },
+              {
+                "disease": "Food poisoning",
+                "confidence": 0.15
+              },
+              {
+                "disease": "Indigestion",
+                "confidence": 0.05
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.6,
+            "reason": "Stomach pain can indicate various conditions, ranging from mild indigestion to more serious issues like appendicitis.  Further evaluation is needed to determine the exact cause.",
+            "recommendations": [
+              "Drink plenty of fluids",
+              "Avoid solid foods for a few hours",
+              "Rest and monitor symptoms",
+              "Take an over-the-counter pain reliever (like ibuprofen or paracetamol) if needed",
+              "If pain worsens or persists for more than 24 hours, seek medical attention",
+              "Contact a doctor or visit a nearby clinic for further evaluation"
+            ]
+          }
+        },
+        {
+          "user_id": "ieaijsijk@gmail.com",
+          "date": "2025-09-07T13:15:44.877546",
+          "current_symptoms": "stomach pain",
+          "report_data": null,
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Gastroenteritis",
+                "confidence": 0.6
+              },
+              {
+                "disease": "Appendicitis",
+                "confidence": 0.2
+              },
+              {
+                "disease": "Indigestion",
+                "confidence": 0.15
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.6,
+            "reason": "Stomach pain can indicate various conditions, ranging from mild indigestion to more serious issues like appendicitis.  Further assessment is needed to determine the exact cause.",
+            "recommendations": [
+              "Drink plenty of fluids",
+              "Avoid solid foods for a few hours",
+              "Take an over-the-counter pain reliever (e.g., ibuprofen)",
+              "Monitor your symptoms closely",
+              "If pain worsens or you experience other symptoms (fever, vomiting, etc.), seek immediate medical attention",
+              "Contact your doctor or visit an urgent care clinic for evaluation"
+            ]
+          }
+        }
+      ],
+      "created_at": "2025-09-06T12:35:10.923288",
+      "_id": "ieaijsijk@gmail.com",
+      "report_data": {
+        "medical_tests": [],
+        "abnormal_results": [],
+        "extracted_text": "",
+        "meta": {}
+      }
+    },
+    {
+      "name": "Shivani Kinagi",
+      "age": 0,
+      "email": "dfgh@gmail.com",
+      "language": "English",
+      "past_history": [],
+      "records": [
+        {
+          "user_id": "dfgh@gmail.com",
+          "date": "2025-09-09T06:22:44.288522",
+          "current_symptoms": "blood from nose",
+          "report_data": null,
+          "triage_result": {
+            "possible_conditions": [
+              {
+                "disease": "Epistaxis (Nosebleed)",
+                "confidence": 0.95
+              },
+              {
+                "disease": "Nasal trauma",
+                "confidence": 0.03
+              },
+              {
+                "disease": "Coagulopathy",
+                "confidence": 0.02
+              }
+            ],
+            "risk_level": "Medium",
+            "risk_proba": 0.6,
+            "reason": "Nosebleeds are common and usually self-limiting, however,  heavy or persistent bleeding warrants medical attention.",
+            "recommendations": [
+              "Apply direct pressure to the bridge of your nose for 10-15 minutes.",
+              "Lean forward and avoid swallowing blood.",
+              "Pinch nostrils together.",
+              "If bleeding persists for more than 20 minutes, seek medical attention.",
+              "Avoid blowing your nose for several hours.",
+              "Consider consulting a doctor if nosebleeds are recurrent."
+            ]
+          }
+        }
+      ],
+      "created_at": "2025-09-09T06:22:08.133242",
+      "_id": "dfgh@gmail.com"
+    }
+  ]
+}
