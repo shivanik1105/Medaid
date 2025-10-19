@@ -1190,7 +1190,7 @@ except Exception:
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 print(f"GOOGLE_API_KEY found: {bool(GOOGLE_API_KEY)}")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-flash-latest")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-flash")
 
 # Emergency keywords for immediate override
 EMERGENCY_KEYWORDS = [
@@ -1318,24 +1318,189 @@ def _build_triage_prompt(symptoms_text: str, report_summary: str = "", past_hist
         if past_history.get("additional_notes"):
             past_history_text += f"Additional notes: {past_history['additional_notes']}\n"
 
-    prompt = f"""
-You are a clinical triage assistant. Provide a single JSON object only with the exact keys:
-- possible_conditions: list of objects with "disease" (string) and "confidence" (float 0-1)
-- risk_level: one of ["Low","Medium","High","Emergency"]
-- risk_proba: float 0-1
-- reason: short explanation (2-3 sentences)
-- recommendations: list of short actionable recommendations (max 6)
+# global LLM instance
+LLM = LLMClient()
 
-Patient info:
+# Add a fallback mechanism
+def get_fallback_response(symptoms_text: str) -> Dict[str, Any]:
+    """Provide a fallback response when LLM is not available"""
+    # Try to extract some basic keywords from symptoms to make response more relevant
+    lower_symptoms = symptoms_text.lower()
+    
+    if "emergency" in lower_symptoms or "severe" in lower_symptoms or "unconscious" in lower_symptoms:
+        return {
+            "possible_conditions": [],
+            "risk_level": "Emergency",
+            "risk_proba": 1.0,
+            "reason": "Emergency keyword detected in symptoms. Seek immediate care.",
+            "recommendations": ["Call emergency services immediately", "Go to nearest hospital"]
+        }
+    elif "pain" in lower_symptoms or "fever" in lower_symptoms:
+        return {
+            "possible_conditions": [{"disease": "Unknown", "confidence": 0.6}],
+            "risk_level": "Medium",
+            "risk_proba": 0.6,
+            "reason": "Common symptoms detected. Further evaluation may be needed.",
+            "recommendations": ["Consult physician", "Monitor symptoms", "Rest and hydrate"]
+        }
+    else:
+        return {
+            "possible_conditions": [{"disease": "Unknown", "confidence": 0.3}],
+            "risk_level": "Low",
+            "risk_proba": 0.3,
+            "reason": "No backend available",
+            "recommendations": ["Consult physician if symptoms persist"]
+        }
+
+# ----------------------------
+# Helpers: JSON extraction
+# ----------------------------
+def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """Extract a JSON object from a string, if possible"""
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+# ----------------------------
+# Prompt builder
+# ----------------------------
+def _build_triage_prompt(symptoms_text: str, report_summary: str = "", past_history: Optional[Dict[str, Any]] = None, location: str = "") -> str:
+    """
+    Builds the prompt for the LLM triage system.
+    """
+    past_history_text = ""
+    if past_history:
+        past_history_text = "\n".join([f"{k}: {v}" for k, v in past_history.items()])
+
+    prompt = f"""
+You are a clinical triage assistant. You must respond with ONLY a valid JSON object and nothing else. Do not include any explanations, markdown formatting, or additional text.
+
+CRITICAL INSTRUCTIONS:
+1. Your entire response must be a single valid JSON object
+2. Do not wrap the JSON in markdown code blocks (no ```json)
+3. Do not add any text before or after the JSON
+4. Ensure all JSON keys are double-quoted strings
+5. Ensure all string values are properly escaped
+6. Ensure the JSON is syntactically correct
+
+The JSON object must have exactly these keys:
+- "possible_conditions": an array of objects, each with "disease" (string) and "confidence" (number between 0 and 1)
+- "risk_level": one of these exact strings: "Low", "Medium", "High", "Emergency"
+- "risk_proba": a number between 0 and 1
+- "reason": a string with a short explanation (2-3 sentences)
+- "recommendations": an array of strings (actionable recommendations, max 6)
+
+Example response format (DO NOT INCLUDE THIS EXAMPLE IN YOUR RESPONSE):
+{{
+  "possible_conditions": [
+    {{"disease": "Common Cold", "confidence": 0.8}},
+    {{"disease": "Flu", "confidence": 0.2}}
+  ],
+  "risk_level": "Low",
+  "risk_proba": 0.1,
+  "reason": "Symptoms suggest a minor viral infection. Rest and hydration are recommended.",
+  "recommendations": [
+    "Rest and drink plenty of fluids",
+    "Monitor symptoms for worsening",
+    "Contact a doctor if fever persists beyond 3 days"
+  ]
+}}
+
+Patient information:
 Symptoms: {symptoms_text}
 Report summary: {report_summary}
 Past medical history:
 {past_history_text if past_history_text else "No past medical history provided."}
 Location: {location}
 
-Only output the JSON object and nothing else.
+Respond ONLY with the JSON object. No other text, no markdown, no explanations. CRITICAL: Valid JSON only!
 """
     return prompt
+
+# global LLM instance
+LLM = LLMClient()
+
+# ----------------------------
+# Helpers: JSON extraction
+# ----------------------------
+def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Extracts a JSON object from a string, if possible.
+    """
+    if not text:
+        return None
+        
+    try:
+        # First try direct parsing
+        return json.loads(text)
+    except Exception:
+        try:
+            # If that fails, try to find JSON in the text
+            # Look for the first { and last } 
+            start = text.find("{")
+            end = text.rfind("}")
+            
+            if start != -1 and end != -1 and end > start:
+                json_str = text[start:end+1]
+                # Try to fix common JSON issues
+                json_str = json_str.replace("'", '"')  # Replace single quotes with double
+                json_str = json_str.replace("\n", "")  # Remove newlines
+                json_str = json_str.replace("\r", "")  # Remove carriage returns
+                
+                # Additional fixes for common issues
+                # Remove any text before the first {
+                first_brace = json_str.find("{")
+                if first_brace > 0:
+                    json_str = json_str[first_brace:]
+                
+                # Remove any text after the last }
+                last_brace = json_str.rfind("}")
+                if last_brace < len(json_str) - 1:
+                    json_str = json_str[:last_brace+1]
+                
+                # Fix trailing commas
+                json_str = json_str.replace(", }", "}")
+                json_str = json_str.replace(", ]", "]")
+                
+                # Try to parse the cleaned JSON
+                return json.loads(json_str)
+        except Exception:
+            pass
+            
+    return None
+
+def get_fallback_response(symptoms_text: str) -> Dict[str, Any]:
+    """
+    Returns a fallback response in case the LLM is not available or fails.
+    """
+    # Try to extract some basic keywords from symptoms to make response more relevant
+    lower_symptoms = symptoms_text.lower() if symptoms_text else ""
+    
+    if "emergency" in lower_symptoms or "severe" in lower_symptoms or "unconscious" in lower_symptoms or "breath" in lower_symptoms:
+        return {
+            "possible_conditions": [{"disease": "Emergency Condition", "confidence": 1.0}],
+            "risk_level": "Emergency",
+            "risk_proba": 1.0,
+            "reason": "Emergency keyword detected in symptoms. Seek immediate medical care.",
+            "recommendations": ["Call emergency services immediately (108 in India)", "Go to nearest hospital immediately", "Do not drive yourself", "Take someone with you if possible"]
+        }
+    elif "pain" in lower_symptoms or "fever" in lower_symptoms or "cough" in lower_symptoms:
+        return {
+            "possible_conditions": [{"disease": "Common Illness", "confidence": 0.6}],
+            "risk_level": "Medium",
+            "risk_proba": 0.6,
+            "reason": "Common symptoms detected. Further evaluation may be needed.",
+            "recommendations": ["Consult physician within 24-48 hours", "Monitor symptoms for worsening", "Rest and hydrate", "Maintain good hygiene"]
+        }
+    else:
+        return {
+            "possible_conditions": [{"disease": "Unknown Condition", "confidence": 0.3}],
+            "risk_level": "Low",
+            "risk_proba": 0.3,
+            "reason": "No serious symptoms detected. Continue monitoring your health.",
+            "recommendations": ["Maintain regular checkups", "Monitor for new symptoms", "Follow healthy lifestyle practices"]
+        }
 
 # ----------------------------
 # LLM prediction wrapper
@@ -1344,17 +1509,38 @@ def llm_predict_assessment(symptoms_text: str, report_summary: str = "", past_hi
     if not LLM.is_available():
         return {"error": "no_gemini", "message": "Gemini backend not initialized (check GOOGLE_API_KEY and langchain_google_genai)."}
     prompt = _build_triage_prompt(symptoms_text, report_summary, past_history, location)
-    system = "Return ONLY a single JSON object."
+    system = "Return ONLY a single JSON object with no additional text or formatting."
 
     try:
-        raw_text = LLM.call_chat(prompt, system=system, max_tokens=600, temperature=0.0)
+        raw_text = LLM.call_chat(prompt, system=system, max_tokens=800, temperature=0.0)  # Increased max_tokens
+        print(f"Raw LLM response: {raw_text[:300]}...")  # Log first 300 chars for debugging
+        
+        # Additional debugging - log the prompt sent
+        print(f"Prompt sent to LLM (first 500 chars): {prompt[:500]}...")
     except Exception as e:
         tb = traceback.format_exc()
         return {"error": "llm_call_failed", "message": str(e), "trace": tb}
 
+    # Clean the raw text before parsing
+    if raw_text:
+        # Remove any markdown code block markers
+        raw_text = raw_text.replace("```json", "").replace("```", "")
+        # Strip whitespace
+        raw_text = raw_text.strip()
+        
     parsed = extract_json_from_text(raw_text)
     if parsed is None:
-        return {"error": "parse_failed", "message": "LLM returned unparsable JSON", "raw_text": raw_text}
+        # Try one more time with extra cleaning
+        if raw_text:
+            # Try to find the first { and last } again after cleaning
+            start = raw_text.find("{")
+            end = raw_text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                cleaned_text = raw_text[start:end+1]
+                parsed = extract_json_from_text(cleaned_text)
+                
+        if parsed is None:
+            return {"error": "parse_failed", "message": "LLM returned unparsable JSON", "raw_text": raw_text[:500]}  # Limit raw text length
 
     try:
         parsed.setdefault("possible_conditions", [])
@@ -1384,9 +1570,14 @@ def llm_predict_assessment(symptoms_text: str, report_summary: str = "", past_hi
             parsed["risk_proba"] = 0.0
         parsed["risk_proba"] = max(0.0, min(1.0, parsed["risk_proba"]))
 
+        # Validate risk_level
+        valid_risk_levels = ["Low", "Medium", "High", "Emergency"]
+        if parsed["risk_level"] not in valid_risk_levels:
+            parsed["risk_level"] = "Medium"  # Default fallback
+
         return parsed
     except Exception as e:
-        return {"error": "validation_failed", "message": str(e), "raw_text": raw_text}
+        return {"error": "validation_failed", "message": str(e), "raw_text": raw_text[:500]}
 
 # ----------------------------
 # Audio transcription helper

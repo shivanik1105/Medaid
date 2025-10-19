@@ -1168,18 +1168,16 @@ def render_facility_card(f):
         phone = f.get("phone")
         dist = f.get("distance_km")
         maps_url = f.get("maps_url") or f.get("maps") or f.get("maps_link")
-        st.markdown(f"**{name}**")
-        if addr:
-            st.markdown(f"{addr}")
-        if dist:
-            st.markdown(f"Distance: {dist} km")
-        if phone:
-            st.markdown(f"Phone: {phone} — [Call](tel:{phone})")
-        if maps_url:
-            st.markdown(f"[Open in map]({maps_url})")
-        st.markdown("---")
-    else:
-        st.markdown(f"- {f}")
+# Add Clinician Dashboard Link
+st.sidebar.markdown("---")
+st.sidebar.markdown("### For Clinicians")
+st.sidebar.markdown("**Clinician Dashboard:**")
+st.sidebar.markdown("Access the clinician dashboard at:")
+st.sidebar.code("http://localhost:8512")
+st.sidebar.markdown("*Default password: medaid123*")
+
+st.markdown("---")
+
 
 def show_past_history_form():
     """Show form to collect and save past medical history"""
@@ -1187,6 +1185,7 @@ def show_past_history_form():
     st.markdown("Please provide your past medical history to help us give you better assessments.")
     
     # Defensive normalization of past_history
+
     raw_ph = st.session_state.user.get("past_history", {}) if st.session_state.user else {}
     past_history = raw_ph if isinstance(raw_ph, dict) else {}
     
@@ -1291,7 +1290,7 @@ def show_past_history_form():
 
 # ---------------- Session state ----------------
 st.set_page_config(page_title="Rural Health Assistant", layout="wide")
-st.title("🏥 Rural Health Assistant — Prototype")
+st.title("🏥 Rural Health Assistant")
 
 if "user" not in st.session_state:
     st.session_state.user = None

@@ -145,3 +145,45 @@ def update_user_report_data(user_id, report_data: dict):
             _write_local(data)
             return True
     return False
+
+def get_all_users_with_records():
+    """Get all users with their records for follow-up processing"""
+    try:
+        data = _read_local()
+        return data.get("users", [])
+    except Exception as e:
+        print(f"Error retrieving users with records: {e}")
+        return []
+
+def get_all_triage_records(limit=50):
+    """Fetches the most recent triage records for the clinician dashboard."""
+    if USE_MONGO:
+        try:
+            # Sort by date descending and get the latest records
+            records = list(users_coll.aggregate([
+                {"$unwind": "$records"},
+                {"$sort": {"records.date": -1}},
+                {"$limit": limit},
+                {"$project": {
+                    "_id": "$records._id",
+                    "patient_name": "$name",
+                    "triage_result": "$records.triage_result",
+                    "date": "$records.date"
+                }}
+            ]))
+            return records
+        except Exception as e:
+            print(f"DB error fetching all records: {e}")
+            return []
+    
+    # Local JSON fallback
+    data = _read_local()
+    all_records = []
+    for user in data.get("users", []):
+        for record in user.get("records", []):
+            record['patient_name'] = user.get('name', 'Unknown')
+            all_records.append(record)
+    
+    # Sort by date and return the most recent ones
+    all_records.sort(key=lambda x: x.get('date', ''), reverse=True)
+    return all_records[:limit]

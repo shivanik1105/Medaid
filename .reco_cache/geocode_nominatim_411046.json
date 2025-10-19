@@ -1,0 +1,26 @@
+{
+  "_ts": 1760889046.0930514,
+  "value": {
+    "lat": 18.4529816,
+    "lng": 73.8494001,
+    "raw": {
+      "place_id": 352228156,
+      "licence": "Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright",
+      "lat": "18.4529816",
+      "lon": "73.8494001",
+      "class": "place",
+      "type": "postcode",
+      "place_rank": 21,
+      "importance": 0.12000999999999995,
+      "addresstype": "postcode",
+      "name": "411046",
+      "display_name": "411046, Pune City, Pune, Maharashtra, India",
+      "boundingbox": [
+        "18.4029816",
+        "18.5029816",
+        "73.7994001",
+        "73.8994001"
+      ]
+    }
+  }
+}
